@@ -357,5 +357,15 @@ It merged ANSWERS.md's Task 2/3/5 written answers into README under matching `##
 *How I adapted/rejected it:*
 I accepted the correction of the stale technical claims rather than asking it to preserve my original wording verbatim, since presenting outdated information as current would be worse for a security-sensitive payroll project than updating it. I agreed with deleting ANSWERS.md rather than leaving a redundant, now-orphaned duplicate behind, and with retitling the existing CI/CD Pipeline section to "(Task 4)" instead of duplicating that content a second time under a separate heading.
 
+*Prompt*
+[Pasted real GitHub Actions runner log output] Download action repository 'hadolint/hadolint-action@v3.1.0'... Download action repository 'aquasecurity/trivy-action@v0.28.0'... Error: Unable to resolve action `aquasecurity/setup-trivy@v0.2.1`, unable to find version `v0.2.1`
+
+*Response*
+This was the first real run of the pipeline on GitHub, and it failed at the Trivy step. Investigated by pulling `trivy-action@v0.28.0`'s own `action.yaml` from GitHub directly: it calls `aquasecurity/setup-trivy@v0.2.1` internally as a nested action, but that exact tag no longer exists in the `setup-trivy` repo (only v0.2.6/v0.3.0/v0.3.1 remain) - it was deleted upstream at some point after `v0.28.0` was released, breaking anyone still pinned to that release. Checked newer `trivy-action` releases (v0.30.0 through v0.36.0) and found the project fixed this exact failure mode itself: from v0.32.0 onward, `setup-trivy` is pinned by commit SHA instead of a floating tag, so it can't break this way again.
+
+*How I adapted/rejected it:*
+I had it bump to `aquasecurity/trivy-action@v0.36.0` (latest at the time) rather than just hunting for a setup-trivy tag that happened to still exist, since that would only delay the same failure until the next tag cleanup upstream. Verified the three action inputs I was already using (`image-ref`, `severity`, `exit-code`) are all still valid in v0.36.0 before swapping the version, so the scan behavior itself doesn't change - only the broken dependency does.
+
+
 *** Candidate Declaration ***
 I confirm that AI tools were used as an assistant to support research, planning, documentation, and architectural review. Final implementation decisions, validation, modifications, and submission materials were completed and reviewed by me before submission.
