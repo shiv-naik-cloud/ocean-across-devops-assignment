@@ -367,5 +367,15 @@ This was the first real run of the pipeline on GitHub, and it failed at the Triv
 I had it bump to `aquasecurity/trivy-action@v0.36.0` (latest at the time) rather than just hunting for a setup-trivy tag that happened to still exist, since that would only delay the same failure until the next tag cleanup upstream. Verified the three action inputs I was already using (`image-ref`, `severity`, `exit-code`) are all still valid in v0.36.0 before swapping the version, so the scan behavior itself doesn't change - only the broken dependency does.
 
 
+*Prompt*
+[Pasted real Trivy scan output from the now-working CI run] payroll-app (alpine 3.21.3) - Total: 32 (HIGH: 30, CRITICAL: 2)... Error: Process completed with exit code 1.
+
+*Response*
+The pipeline ran correctly this time and the security gate did exactly what it was built for: it found 32 real vulnerabilities (2 CRITICAL) in the Alpine base image's OS packages (openssl/libcrypto3, libssl3, libxml2, libpng, libexpat, musl, nghttp2-libs, zlib) and failed the build rather than silently shipping them. Every CVE in the output had a "Fixed Version" listed, and several were the same library/branch with only a patch-revision bump (e.g. libssl3 3.3.3-r0 → 3.3.7-r0), which is the signature of an Alpine security backport rather than a major version jump - meaning `apk upgrade` against the existing base, not a different base image entirely, should resolve them.
+
+*How I adapted/rejected it:*
+I had it add `RUN apk update && apk upgrade --no-cache` to the Dockerfile right after `FROM`, so the build always pulls whatever's currently patched in Alpine's repo for that branch instead of whatever was frozen into the base image when it was last published. It flagged that it couldn't verify this locally since Docker Desktop isn't running on this machine, and that the real test is pushing this and reading the next CI run's Trivy output rather than assuming it's fixed - I accepted that rather than asking it to guess.
+
+
 *** Candidate Declaration ***
 I confirm that AI tools were used as an assistant to support research, planning, documentation, and architectural review. Final implementation decisions, validation, modifications, and submission materials were completed and reviewed by me before submission.
