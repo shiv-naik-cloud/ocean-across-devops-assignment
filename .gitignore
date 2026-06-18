@@ -1,9 +1,18 @@
 # Ignore Terraform binaries & lock files
 Terraform/.terraform/
 Terraform/.terraform.lock.hcl
+Terraform/backend-bootstrap/.terraform/
+Terraform/backend-bootstrap/.terraform.lock.hcl
 
 # Ignore Terraform state files
 *.tfstate
 *.tfstate.backup
 *.log.terraform/
 Terraform/.terraform/
+
+# Ignore real variable values & backend config (contain secrets / env-specific names)
+Terraform/terraform.tfvars
+Terraform/backend.hcl
+
+# Ignore saved plan files (can contain sensitive values in plain text)
+*.tfplan

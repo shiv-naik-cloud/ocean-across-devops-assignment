@@ -1,0 +1,7 @@
+# Copy this file to backend.hcl (gitignored) and fill in the values printed
+# by `terraform output` in backend-bootstrap/, then run:
+#   terraform init -backend-config=backend.hcl
+
+bucket         = "payroll-tfstate-xxxxxxxx"
+dynamodb_table = "payroll-tfstate-lock"
+region         = "eu-west-2"

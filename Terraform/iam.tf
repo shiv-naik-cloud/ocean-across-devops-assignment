@@ -1,3 +1,4 @@
+# One role + policy + instance profile per tenant, scoped to its own S3 prefix and secrets
 data "aws_iam_policy_document" "ec2_assume_role" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -9,92 +10,101 @@ data "aws_iam_policy_document" "ec2_assume_role" {
   }
 }
 
-resource "aws_iam_role" "companies_role" {
-  name               = "companies-role"
+resource "aws_iam_role" "tenant" {
+  for_each = var.tenants
+
+  name               = "${var.project_name}-${each.key}-role"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
+
+  tags = {
+    Name = "${var.project_name}-${each.key}-role"
+  }
 }
 
-resource "aws_iam_role" "bureaus_role" {
-  name               = "bureaus-role"
-  assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
-}
+data "aws_iam_policy_document" "tenant" {
+  for_each = var.tenants
 
-resource "aws_iam_role" "employees_role" {
-  name               = "employees-role"
-  assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
-}
+  statement {
+    sid       = "S3TenantPrefixReadWrite"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${aws_s3_bucket.payroll_documents.arn}/${each.value}/*"]
+  }
 
-resource "aws_iam_policy" "companies_policy" {
-  name = "companies-s3-policy"
+  # ListBucket must target the bucket itself, but the prefix condition keeps
+  # it from revealing other tenants' object keys
+  statement {
+    sid       = "S3TenantPrefixList"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.payroll_documents.arn]
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject"]
-        Resource = "${aws_s3_bucket.payroll_bucket.arn}/companies/*"
-      }
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["${each.value}/*"]
+    }
+  }
+
+  statement {
+    sid     = "OwnSecretAccess"
+    effect  = "Allow"
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [
+      aws_secretsmanager_secret.tenant[each.key].arn,
+      aws_db_instance.postgres.master_user_secret[0].secret_arn,
     ]
-  })
+  }
+
+  statement {
+    sid       = "OwnSsmParameterAccess"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter", "ssm:GetParametersByPath"]
+    resources = ["arn:aws:ssm:${var.aws_region}:*:parameter/${var.project_name}/${each.key}/*"]
+  }
+
+  statement {
+    sid       = "KmsDecryptForOwnData"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
+    resources = [aws_kms_key.payroll.arn]
+  }
+
+  # Lets the SSM-driven CI/CD deploy pull the built image onto this instance
+  statement {
+    sid       = "CiArtifactsRead"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.ci_artifacts.arn}/${each.value}/*"]
+  }
 }
 
-resource "aws_iam_role_policy_attachment" "companies_attach" {
-  role       = aws_iam_role.companies_role.name
-  policy_arn = aws_iam_policy.companies_policy.arn
+resource "aws_iam_policy" "tenant" {
+  for_each = var.tenants
+
+  name   = "${var.project_name}-${each.key}-policy"
+  policy = data.aws_iam_policy_document.tenant[each.key].json
 }
 
-resource "aws_iam_policy" "bureaus_policy" {
-  name = "bureaus-s3-policy"
+resource "aws_iam_role_policy_attachment" "tenant" {
+  for_each = var.tenants
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject"]
-        Resource = "${aws_s3_bucket.payroll_bucket.arn}/bureaus/*"
-      }
-    ]
-  })
+  role       = aws_iam_role.tenant[each.key].name
+  policy_arn = aws_iam_policy.tenant[each.key].arn
 }
 
-resource "aws_iam_role_policy_attachment" "bureaus_attach" {
-  role       = aws_iam_role.bureaus_role.name
-  policy_arn = aws_iam_policy.bureaus_policy.arn
+# Lets SSM Agent register the instance and run the CI/CD deploy command -
+# instances stay in private subnets with no SSH/public IP needed for deploys
+resource "aws_iam_role_policy_attachment" "tenant_ssm" {
+  for_each = var.tenants
+
+  role       = aws_iam_role.tenant[each.key].name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-resource "aws_iam_policy" "employees_policy" {
-  name = "employees-s3-policy"
+resource "aws_iam_instance_profile" "tenant" {
+  for_each = var.tenants
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject"]
-        Resource = "${aws_s3_bucket.payroll_bucket.arn}/employees/*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "employees_attach" {
-  role       = aws_iam_role.employees_role.name
-  policy_arn = aws_iam_policy.employees_policy.arn
-}
-
-resource "aws_iam_instance_profile" "companies_profile" {
-  name = "companies-profile"
-  role = aws_iam_role.companies_role.name
-}
-
-resource "aws_iam_instance_profile" "bureaus_profile" {
-  name = "bureaus-profile"
-  role = aws_iam_role.bureaus_role.name
-}
-
-resource "aws_iam_instance_profile" "employees_profile" {
-  name = "employees-profile"
-  role = aws_iam_role.employees_role.name
+  name = "${var.project_name}-${each.key}-profile"
+  role = aws_iam_role.tenant[each.key].name
 }

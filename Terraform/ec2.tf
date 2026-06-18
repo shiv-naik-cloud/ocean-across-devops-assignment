@@ -8,38 +8,21 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
-resource "aws_instance" "companies" {
+# No SSH key pair - the security group has no inbound SSH rule, so a key
+# would be unusable anyway. Admin access goes through SSM Session Manager.
+resource "aws_instance" "tenant" {
+  for_each = var.tenants
+
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.private_1.id
-  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
-  iam_instance_profile = aws_iam_instance_profile.companies_profile.name
+  instance_type          = var.instance_type
+  subnet_id              = aws_subnet.private[var.tenant_subnet_az_index].id
+  vpc_security_group_ids = [aws_security_group.tenant[each.key].id]
+  iam_instance_profile   = aws_iam_instance_profile.tenant[each.key].name
 
   tags = {
-    Name = "companies-ec2"
+    Name = "${var.project_name}-${each.key}-ec2"
   }
-}
 
-resource "aws_instance" "bureaus" {
-  ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.private_2.id
-  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
-  iam_instance_profile = aws_iam_instance_profile.bureaus_profile.name
-
-  tags = {
-    Name = "bureaus-ec2"
-  }
-}
-
-resource "aws_instance" "employees" {
-  ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.private_2.id
-  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
-  iam_instance_profile = aws_iam_instance_profile.employees_profile.name
-
-  tags = {
-    Name = "employees-ec2"
-  }
+  # Ensures the role's policy is attached before the instance boots
+  depends_on = [aws_iam_role_policy_attachment.tenant]
 }

@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars (gitignored) and fill in real values. No DB
+# password here - RDS manages that itself directly in Secrets Manager.
+
+alert_email = "you@example.com"
+
+# No SSH variables - there's no inbound SSH rule on the tenant security
+# groups at all. For interactive admin access, use SSM Session Manager:
+#   aws ssm start-session --target <instance-id>
+
+# Repo GitHub Actions OIDC is allowed to assume the deploy role from
+# (defaults to this repo - only override if you forked it)
+# github_repository = "owner/repo"
+
+# Optional - leave disabled until you own a Route 53 zone + real ACM cert
+# (the ALB's HTTPS listener works without these via a self-signed cert)
+# enable_dns_and_tls   = true
+# domain_name          = "example.com"
+# acm_certificate_arn  = "arn:aws:acm:eu-west-2:123456789012:certificate/xxxx"

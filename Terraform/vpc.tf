@@ -1,8 +1,10 @@
 resource "aws_vpc" "main" {
-  cidr_block = var.vpc_cidr
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
 
   tags = {
-    Name = "payroll-vpc"
+    Name = "${var.project_name}-vpc"
   }
 }
 
@@ -10,113 +12,102 @@ resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "payroll-igw"
+    Name = "${var.project_name}-igw"
   }
 }
 
-resource "aws_subnet" "public_1" {
+# One public + one private subnet per AZ
+resource "aws_subnet" "public" {
+  count = length(var.availability_zones)
+
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.1.0/24"
-  availability_zone       = "ap-south-1a"
+  cidr_block              = var.public_subnet_cidrs[count.index]
+  availability_zone       = var.availability_zones[count.index]
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "public-subnet-1"
+    Name = "${var.project_name}-public-${count.index + 1}"
   }
 }
 
-resource "aws_subnet" "public_2" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.2.0/24"
-  availability_zone       = "ap-south-1b"
-  map_public_ip_on_launch = true
+resource "aws_subnet" "private" {
+  count = length(var.availability_zones)
 
-  tags = {
-    Name = "public-subnet-2"
-  }
-}
-
-resource "aws_subnet" "private_1" {
   vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.3.0/24"
-  availability_zone = "ap-south-1a"
+  cidr_block        = var.private_subnet_cidrs[count.index]
+  availability_zone = var.availability_zones[count.index]
 
   tags = {
-    Name = "private-subnet-1"
+    Name = "${var.project_name}-private-${count.index + 1}"
   }
 }
 
-resource "aws_subnet" "private_2" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.4.0/24"
-  availability_zone = "ap-south-1b"
-
-  tags = {
-    Name = "private-subnet-2"
-  }
-}
-
-resource "aws_route_table" "public_rt" {
+resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+
   tags = {
-    Name = "public-rt"
+    Name = "${var.project_name}-public-rt"
   }
 }
 
-resource "aws_route" "internet_access" {
-  route_table_id         = aws_route_table.public_rt.id
-  destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.igw.id
+resource "aws_route_table_association" "public" {
+  count = length(aws_subnet.public)
+
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
 }
 
-resource "aws_route_table_association" "public_1_assoc" {
-  subnet_id      = aws_subnet.public_1.id
-  route_table_id = aws_route_table.public_rt.id
-}
+# One NAT Gateway per AZ, each needing its own Elastic IP
+resource "aws_eip" "nat" {
+  count = length(var.availability_zones)
 
-resource "aws_route_table_association" "public_2_assoc" {
-  subnet_id      = aws_subnet.public_2.id
-  route_table_id = aws_route_table.public_rt.id
-}
-
-resource "aws_eip" "nat_eip" {
   domain = "vpc"
 
   tags = {
-    Name = "nat-eip"
+    Name = "${var.project_name}-nat-eip-${count.index + 1}"
   }
+
+  # Terraform can't infer this dependency from the arguments above
+  depends_on = [aws_internet_gateway.igw]
 }
 
 resource "aws_nat_gateway" "nat" {
-  allocation_id = aws_eip.nat_eip.id
-  subnet_id     = aws_subnet.public_1.id
+  count = length(var.availability_zones)
+
+  allocation_id = aws_eip.nat[count.index].id
+  subnet_id     = aws_subnet.public[count.index].id
 
   tags = {
-    Name = "nat-gateway"
+    Name = "${var.project_name}-nat-${count.index + 1}"
   }
+
+  depends_on = [aws_internet_gateway.igw]
 }
 
-resource "aws_route_table" "private_rt" {
+# Each AZ's private subnet egresses through its own AZ's NAT Gateway
+resource "aws_route_table" "private" {
+  count = length(var.availability_zones)
+
   vpc_id = aws_vpc.main.id
 
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.nat[count.index].id
+  }
+
   tags = {
-    Name = "private-rt"
+    Name = "${var.project_name}-private-rt-${count.index + 1}"
   }
 }
 
-resource "aws_route" "private_internet_access" {
-  route_table_id         = aws_route_table.private_rt.id
-  destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.nat.id
-}
+resource "aws_route_table_association" "private" {
+  count = length(aws_subnet.private)
 
-resource "aws_route_table_association" "private_1_assoc" {
-  subnet_id      = aws_subnet.private_1.id
-  route_table_id = aws_route_table.private_rt.id
-}
-
-resource "aws_route_table_association" "private_2_assoc" {
-  subnet_id      = aws_subnet.private_2.id
-  route_table_id = aws_route_table.private_rt.id
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private[count.index].id
 }

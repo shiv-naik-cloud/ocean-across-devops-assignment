@@ -1,0 +1,157 @@
+# Builds + tests the Docker app once, then deploys it to each tenant's
+# EC2 instance as its own independent job. A push to main deploys all
+# three; "Run workflow" lets one team redeploy just their own service
+# (e.g. "bureaus") to the dev or production environment without
+# touching the other two.
+#
+# Deploys go through S3 + AWS SSM Run Command, not SSH - the tenant
+# instances live in private subnets with no public IP, and authenticate
+# via short-lived OIDC credentials (no AWS keys stored in GitHub).
+name: CI-CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy to"
+        type: choice
+        default: production
+        options:
+          - production
+          - dev
+      service:
+        description: "Service to deploy (push events always deploy all three)"
+        type: choice
+        default: all
+        options:
+          - all
+          - companies
+          - bureaus
+          - employees
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # No app-level unit tests yet (the image is currently static nginx
+      # content) - lint the Dockerfile and scan the built image instead,
+      # since those are real, automated checks that matter for a
+      # security-sensitive payroll app either way.
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Docker/Dockerfile
+
+      - name: Build image
+        run: docker build -t payroll-app ./Docker
+
+      - name: Scan image for known vulnerabilities
+        uses: aquasecurity/trivy-action@v0.28.0
+        with:
+          image-ref: payroll-app
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      # Smoke test: container must actually serve a response
+      - name: Test - container starts and responds
+        run: |
+          docker run -d -p 8080:80 --name payroll-app-test payroll-app
+          sleep 3
+          curl -sf http://localhost:8080 || (docker logs payroll-app-test && exit 1)
+          docker stop payroll-app-test
+
+  deploy-companies:
+    needs: build-and-test
+    if: github.event_name == 'push' || github.event.inputs.service == 'all' || github.event.inputs.service == 'companies'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: deploy-companies
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t payroll-app ./Docker
+
+      - name: Save image
+        run: docker save payroll-app | gzip > payroll-app.tar.gz
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: Deploy to Companies EC2 via SSM
+        run: bash .github/scripts/ssm-deploy.sh companies company "${{ secrets.CI_ARTIFACTS_BUCKET }}"
+
+  deploy-bureaus:
+    needs: build-and-test
+    if: github.event_name == 'push' || github.event.inputs.service == 'all' || github.event.inputs.service == 'bureaus'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: deploy-bureaus
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t payroll-app ./Docker
+
+      - name: Save image
+        run: docker save payroll-app | gzip > payroll-app.tar.gz
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: Deploy to Bureaus EC2 via SSM
+        run: bash .github/scripts/ssm-deploy.sh bureaus bureau "${{ secrets.CI_ARTIFACTS_BUCKET }}"
+
+  deploy-employees:
+    needs: build-and-test
+    if: github.event_name == 'push' || github.event.inputs.service == 'all' || github.event.inputs.service == 'employees'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: deploy-employees
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t payroll-app ./Docker
+
+      - name: Save image
+        run: docker save payroll-app | gzip > payroll-app.tar.gz
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: Deploy to Employees EC2 via SSM
+        run: bash .github/scripts/ssm-deploy.sh employees employee "${{ secrets.CI_ARTIFACTS_BUCKET }}"
